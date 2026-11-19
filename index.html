@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Post Display</title>
+<style>
+  :root {
+    --speed: 1100ms;                        /* transition duration */
+    --ease: cubic-bezier(.65, 0, .2, 1);
+    --card-w: 1080px;                       /* post size (4:5 vertical) */
+    --card-h: 1350px;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%; margin: 0;
+    overflow: hidden;
+    background: #05060d;
+    cursor: none;
+  }
+
+  .stage { position: fixed; inset: 0; overflow: hidden; }
+
+  /* Ambient background: blurred colors of the current post, crossfading */
+  .bg {
+    position: absolute; inset: -8%;
+    opacity: 0;
+    filter: blur(70px) saturate(1.4) brightness(.55);
+    transition: opacity calc(var(--speed) * 1.4) ease;
+    background-size: cover; background-position: center;
+  }
+  .bg.on { opacity: 1; }
+  .vignette {
+    position: absolute; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse at center, transparent 45%, rgba(0,0,0,.55) 100%);
+  }
+
+  .cards { position: absolute; inset: 0; }
+
+  .card {
+    position: absolute; left: 50%; top: 50%;
+    width: var(--card-w); height: var(--card-h);
+    margin: calc(var(--card-h) / -2) 0 0 calc(var(--card-w) / -2);
+    --scale: 1;
+    transform: translateX(120vw) scale(var(--scale));   /* parked off-screen right */
+    visibility: hidden;
+    border-radius: 36px;
+    overflow: hidden;
+    background: #111;
+    box-shadow: 0 40px 120px rgba(0,0,0,.6), 0 0 0 2px rgba(255,255,255,.08);
+    will-change: transform, opacity;
+  }
+  .card.active    { transform: translateX(0) scale(var(--scale)); visibility: visible; }
+  .card.animating { transition: transform var(--speed) var(--ease), opacity var(--speed) ease; visibility: visible; }
+  .card.leaving   { opacity: 0; }
+
+  .card img {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%;
+    object-fit: cover; display: block;
+  }
+  .card.active img { animation: drift 6.5s ease-out both; }
+  @keyframes drift { from { transform: scale(1.07); } to { transform: scale(1); } }
+
+  @media (prefers-reduced-motion: reduce) {
+    .card.animating { transition-duration: 1ms; }
+    .card.active img { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+<div class="stage">
+  <div id="bgs"></div>
+  <div class="vignette"></div>
+  <div class="cards" id="cards"></div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const INTERVAL = 5000;   // ms between transitions
+  const SPEED    = 1100;   // ms, must match --speed in CSS
+  const CARD_W = 1080, CARD_H = 1350;
+
+  /* The three posts, loaded from the same folder as this index.html */
+  const IMAGES = ["imagen1.jpeg", "imagen2.jpeg", "imagen3.jpeg"];
+
+  const cardsBox = document.getElementById("cards");
+  const bgsBox   = document.getElementById("bgs");
+
+  const cards = IMAGES.map((src) => {
+    const el = document.createElement("article");
+    el.className = "card";
+    const img = new Image();
+    img.src = src;
+    img.alt = "";
+    img.draggable = false;
+    el.appendChild(img);
+    cardsBox.appendChild(el);
+
+    const bg = document.createElement("div");
+    bg.className = "bg";
+    bg.style.backgroundImage = `url("${src}")`;
+    bgsBox.appendChild(bg);
+    return { el, bg };
+  });
+
+  /* Scale the 1080x1350 post to the screen (on 1920x1080 it fills ~96 % of the height) */
+  function fit() {
+    const s = Math.min(innerWidth / CARD_W, innerHeight / CARD_H) * 0.96;
+    cards.forEach((c) => c.el.style.setProperty("--scale", s));
+  }
+  addEventListener("resize", fit);
+  fit();
+
+  /* ---------- Transition: next post enters from the right, current exits left ---------- */
+  let current = 0;
+
+  function advance() {
+    const next = (current + 1) % cards.length;
+    const out = cards[current], inc = cards[next];
+
+    inc.el.classList.remove("active", "animating", "leaving");
+    inc.el.style.transform = "";
+    void inc.el.offsetWidth;
+
+    out.el.classList.remove("active");
+    out.el.classList.add("animating", "leaving");
+    inc.el.classList.add("animating", "active");
+
+    const s = inc.el.style.getPropertyValue("--scale") || 1;
+    out.el.style.transform = `translateX(-120vw) scale(${s})`;
+
+    out.bg.classList.remove("on");
+    inc.bg.classList.add("on");
+
+    setTimeout(() => {
+      out.el.classList.remove("animating", "leaving");
+      out.el.style.transform = "";
+    }, SPEED + 60);
+
+    current = next;
+  }
+
+  /* ---------- Always-on loop: timestamp-based, never pauses ---------- */
+  let nextAt = performance.now() + INTERVAL;
+
+  function tick() {
+    const now = performance.now();
+    if (now >= nextAt) {
+      advance();
+      nextAt += INTERVAL;
+      if (nextAt < now) nextAt = now + INTERVAL;   // catch up after a throttled tab
+    }
+    setTimeout(tick, Math.max(20, Math.min(250, nextAt - performance.now())));
+  }
+
+  cards[0].el.classList.add("active");
+  cards[0].bg.classList.add("on");
+  tick();
+})();
+</script>
+</body>
+</html>
