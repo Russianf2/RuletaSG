@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>Post Display</title>
+<style>
+  /* Written with plain CSS (no custom properties, no "inset") so older Smart TV
+     browsers (Tizen, webOS, Android TV, Vidaa, Fire TV...) render it correctly. */
+  html, body {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%; height: 100%;
+    margin: 0; padding: 0;
+    overflow: hidden;                 /* no scrollbars, nothing to scroll */
+    background: #000;
+    cursor: none;
+    -ms-overflow-style: none;         /* old Edge / IE */
+    scrollbar-width: none;            /* Firefox */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  html::-webkit-scrollbar, body::-webkit-scrollbar,
+  .stage::-webkit-scrollbar { display: none; width: 0; height: 0; }
+
+  :fullscreen, :-webkit-full-screen, :-moz-full-screen, :-ms-fullscreen {
+    width: 100%; height: 100%; background: #000;
+  }
+
+  .stage {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%; height: 100%;
+    overflow: hidden;
+  }
+
+  /* Each post is a full-screen 1920x1080 (16:9) image */
+  .slide {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    width: 100%; height: 100%;
+    overflow: hidden;
+    visibility: hidden;
+    -webkit-transform: translate3d(100%, 0, 0);          /* parked off-screen right */
+            transform: translate3d(100%, 0, 0);
+    -webkit-backface-visibility: hidden;
+            backface-visibility: hidden;
+  }
+  .slide.active    { visibility: visible; -webkit-transform: translate3d(0, 0, 0); transform: translate3d(0, 0, 0); }
+  .slide.animating {
+    visibility: visible;
+    -webkit-transition: -webkit-transform 1100ms cubic-bezier(.65, 0, .2, 1), opacity 1100ms ease;
+            transition: transform 1100ms cubic-bezier(.65, 0, .2, 1), opacity 1100ms ease;
+  }
+  .slide.leaving   { opacity: .6; }
+
+  .slide img {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    -o-object-fit: cover;
+       object-fit: cover;             /* fills the whole screen */
+    display: block;
+    border: 0;
+    -webkit-user-drag: none;
+  }
+</style>
+</head>
+<body>
+
+<div class="stage" id="stage"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  var INTERVAL = 5000;   // ms between transitions
+  var SPEED    = 1100;   // ms, must match the transition duration in CSS
+
+  /* The three 1920x1080 posts, loaded from the same folder as this index.html */
+  var NAMES = ["Imagen1", "Imagen2", "Imagen3"];
+  var EXTS  = ["png", "jpg", "jpeg", "webp"];   // tried in this order for each name
+
+  var stage = document.getElementById("stage");
+
+  /* Tries Imagen1.png, Imagen1.jpg, ... until one loads, so the extension doesn't matter */
+  function loadWithAnyExtension(img, name) {
+    var i = 0;
+    img.onerror = function () {
+      i += 1;
+      if (i < EXTS.length) { img.src = name + "." + EXTS[i]; }
+    };
+    img.src = name + "." + EXTS[0];
+  }
+
+  var slides = [];
+  for (var n = 0; n < NAMES.length; n++) {
+    var el = document.createElement("div");
+    el.className = "slide";
+    var img = new Image();
+    img.alt = "";
+    img.draggable = false;
+    loadWithAnyExtension(img, NAMES[n]);
+    el.appendChild(img);
+    stage.appendChild(el);
+    slides.push(el);
+  }
+
+  function setTransform(el, value) {
+    el.style.webkitTransform = value;
+    el.style.transform = value;
+  }
+
+  /* ---------- Transition: next image enters from the right, current exits left ---------- */
+  var current = 0;
+
+  function advance() {
+    var next = (current + 1) % slides.length;
+    var out = slides[current], inc = slides[next];
+
+    inc.className = "slide";
+    setTransform(inc, "");
+    void inc.offsetWidth;                                   // commit the parked position
+
+    out.className = "slide animating leaving";
+    inc.className = "slide animating active";
+    setTransform(out, "translate3d(-100%, 0, 0)");
+
+    setTimeout(function () {
+      out.className = "slide";
+      setTransform(out, "");
+    }, SPEED + 60);
+
+    current = next;
+  }
+
+  /* ---------- Always-on loop: timestamp-based, never pauses ---------- */
+  function now() {
+    return (window.performance && performance.now) ? performance.now() : new Date().getTime();
+  }
+
+  var nextAt = now() + INTERVAL;
+
+  function tick() {
+    var t = now();
+    if (t >= nextAt) {
+      advance();
+      nextAt += INTERVAL;
+      if (nextAt < t) { nextAt = t + INTERVAL; }            // catch up after a throttled tab
+    }
+    setTimeout(tick, Math.max(20, Math.min(250, nextAt - now())));
+  }
+
+  /* ---------- Fullscreen (standard + vendor-prefixed APIs) ----------
+     Tries on load. Browsers and TVs usually need a user action, so the first
+     click, tap, or remote-control key press enters fullscreen. If fullscreen is
+     left later, the next OK/Enter or click brings it back. On TV browsers with
+     no Fullscreen API at all, the page already fills 100 % of the screen. */
+  var root = document.documentElement;
+
+  function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement ||
+              document.webkitCurrentFullScreenElement || document.mozFullScreenElement ||
+              document.msFullscreenElement);
+  }
+
+  function requestFullscreen() {
+    if (isFullscreen()) { return true; }
+    var req = root.requestFullscreen || root.webkitRequestFullscreen || root.webkitRequestFullScreen ||
+              root.mozRequestFullScreen || root.msRequestFullscreen;
+    if (!req) { return false; }
+    try {
+      var result = req.call(root);
+      if (result && typeof result["catch"] === "function") { result["catch"](function () {}); }
+      return true;
+    } catch (err) {
+      return false;
+    }
+  }
+
+  /* Keys that must keep their normal job (exit / back on TV remotes and keyboards) */
+  var LEAVE_KEYS = { 8: 1, 27: 1, 4: 1, 461: 1, 10009: 1, 10182: 1 };
+  /* Keys that would scroll the page: arrows, space, page up/down, home/end */
+  var SCROLL_KEYS = { 32: 1, 33: 1, 34: 1, 35: 1, 36: 1, 37: 1, 38: 1, 39: 1, 40: 1 };
+
+  function onKey(e) {
+    var code = e.keyCode || e.which;
+    if (LEAVE_KEYS[code]) { return; }
+    if (SCROLL_KEYS[code] && e.preventDefault) { e.preventDefault(); }
+    requestFullscreen();            // OK / Enter, arrows, numbers, colour keys, play... any remote key
+  }
+
+  function onPointer() { requestFullscreen(); }
+
+  document.addEventListener("keydown", onKey, true);
+  document.addEventListener("click", onPointer, true);        // mouse, touch and webOS Magic Remote pointer
+  document.addEventListener("touchend", onPointer, true);
+
+  /* Keep the layout at 100 % when the TV switches in or out of fullscreen */
+  function refreshLayout() {
+    window.scrollTo(0, 0);
+    stage.style.width = "100%";
+    stage.style.height = "100%";
+  }
+  var changeEvents = ["fullscreenchange", "webkitfullscreenchange", "mozfullscreenchange", "MSFullscreenChange"];
+  for (var c = 0; c < changeEvents.length; c++) { document.addEventListener(changeEvents[c], refreshLayout, false); }
+  window.addEventListener("resize", refreshLayout, false);
+
+  // Block scrolling by touch / wheel so nothing can ever shift the layout
+  document.addEventListener("wheel", function (e) { e.preventDefault(); }, { passive: false });
+  document.addEventListener("touchmove", function (e) { e.preventDefault(); }, { passive: false });
+
+  requestFullscreen();
+
+  slides[0].className = "slide active";
+  tick();
+})();
+</script>
+</body>
+</html>
