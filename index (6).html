@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Video Player</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="referrer" content="no-referrer-when-downgrade">
+<style>
+  /* Fullscreen, no scrollbars, no chrome. Percent + vw/vh both set for old TV browsers. */
+  html, body {
+    margin: 0; padding: 0;
+    width: 100%; height: 100%;
+    overflow: hidden;
+    background: #000;
+  }
+  #player {
+    position: fixed; top: 0; left: 0;
+    width: 100%; height: 100%;
+    width: 100vw; height: 100vh;
+    border: 0; display: block; background: #000;
+  }
+  #vid {
+    position: fixed; top: 0; left: 0;
+    width: 100%; height: 100%;
+    width: 100vw; height: 100vh;
+    object-fit: contain; /* use "cover" to fill the screen and crop edges */
+    background: #000; display: block;
+  }
+  /* Transparent gesture catcher: captures the first click/touch so the page
+     is allowed to enter fullscreen (clicks inside a cross-origin iframe are
+     invisible to this page). It removes itself after the first gesture. */
+  #gate {
+    position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 10; cursor: pointer;
+    display: -webkit-flex; display: flex;
+    -webkit-align-items: flex-end; align-items: flex-end;
+    -webkit-justify-content: center; justify-content: center;
+    background: transparent;
+  }
+  #gate span {
+    margin-bottom: 4vh; padding: 0.7em 1.4em;
+    font: 600 22px/1.2 Arial, Helvetica, sans-serif;
+    color: #fff; background: rgba(0,0,0,.65); border-radius: 999px;
+  }
+  .hidden { display: none !important; }
+  .idle { cursor: none; }
+</style>
+</head>
+<body>
+
+<div id="gate"><span>Press OK or click to start fullscreen</span></div>
+<iframe id="player"
+        title="Video"
+        allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
+        allowfullscreen
+        webkitallowfullscreen
+        mozallowfullscreen
+        scrolling="no"
+        frameborder="0"></iframe>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================= CONFIG ================= */
+  var CONFIG = {
+    // 'drive' = embed the Drive /preview iframe (no true loop, autoplay not guaranteed).
+    // 'video' = play a direct video file URL in a <video autoplay muted loop playsinline>
+    //           tag: seamless loop + reliable muted autoplay.
+    MODE: 'video',
+
+    // Only for MODE 'video': a direct .mp4 URL (your own server, R2/S3/Bunny, etc.).
+    VIDEO_URL: '1119.mp4', // relative path: file sits next to index.html in the same repo
+
+    // The ID from your Drive link: https://drive.google.com/file/d/<FILE_ID>/view
+    FILE_ID: '1PjfFHhE7buxzGgyfkR4t1hMtMllqqZA7',
+
+    // Reload the iframe every N seconds to emulate looping.
+    // Set to your video's length (plus a small buffer for Drive to start playback).
+    // Set to 0 to disable. Too short = video gets cut off.
+    RELOAD_INTERVAL_SECONDS: 195,
+
+    // Adds ?autoplay=1 to the preview URL. Undocumented and often ignored by Drive.
+    TRY_AUTOPLAY_PARAM: true,
+
+    // Hide the mouse cursor after this many ms of inactivity (0 = never).
+    HIDE_CURSOR_AFTER_MS: 3000
+  };
+
+  // Optional overrides via URL: index.html?id=FILE_ID&reload=600
+  function getParam(name) {
+    var m = new RegExp('[?&]' + name + '=([^&#]*)').exec(window.location.search);
+    return m ? decodeURIComponent(m[1]) : null;
+  }
+  var qId = getParam('id');
+  var qReload = getParam('reload');
+  if (qId) CONFIG.FILE_ID = qId;
+  if (qReload !== null && !isNaN(parseInt(qReload, 10))) {
+    CONFIG.RELOAD_INTERVAL_SECONDS = parseInt(qReload, 10);
+  }
+  /* ========================================== */
+
+  var frame = document.getElementById('player');
+  var gate = document.getElementById('gate');
+  var reloadTimer = null;
+
+  function buildUrl(bust) {
+    var url = 'https://drive.google.com/file/d/' + CONFIG.FILE_ID + '/preview';
+    var params = [];
+    if (CONFIG.TRY_AUTOPLAY_PARAM) params.push('autoplay=1');
+    if (bust) params.push('_r=' + new Date().getTime());
+    return params.length ? url + '?' + params.join('&') : url;
+  }
+
+  function loadFrame(bust) {
+    // Going through about:blank forces a true reload even if the URL is unchanged.
+    frame.src = 'about:blank';
+    window.setTimeout(function () {
+      frame.onload = function () {
+        // Best effort: give the Drive player keyboard focus so OK/Enter/Space
+        // from a remote or keyboard can start playback after a reload.
+        try { frame.focus(); } catch (e) {}
+      };
+      frame.src = buildUrl(bust);
+    }, 60);
+  }
+
+  /* ---------- Direct <video> mode ---------- */
+  var video = null;
+  function setupVideo() {
+    frame.className = 'hidden';
+    video = document.createElement('video');
+    video.id = 'vid';
+    video.setAttribute('autoplay', '');
+    video.setAttribute('muted', '');
+    video.setAttribute('loop', '');
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+    video.setAttribute('preload', 'auto');
+    video.autoplay = true;
+    video.defaultMuted = true;
+    video.muted = true;          // required for browsers to allow autoplay
+    video.loop = true;
+    video.playsInline = true;
+    video.src = CONFIG.VIDEO_URL;
+    document.body.insertBefore(video, gate);
+    // Fallback if a TV browser ignores the loop attribute.
+    video.addEventListener('ended', function () {
+      video.currentTime = 0;
+      var p = video.play();
+      if (p && typeof p.catch === 'function') p.catch(function () {});
+    }, false);
+    var p0 = video.play();
+    if (p0 && typeof p0.catch === 'function') p0.catch(function () {});
+  }
+
+  /* ---------- Fullscreen (standard + vendor-prefixed) ---------- */
+  function isFullscreen() {
+    return !!(document.fullscreenElement ||
+              document.webkitFullscreenElement ||
+              document.webkitCurrentFullScreenElement ||
+              document.mozFullScreenElement ||
+              document.msFullscreenElement);
+  }
+
+  function enterFullscreen() {
+    if (isFullscreen()) return;
+    var el = document.documentElement;
+    var fn = el.requestFullscreen ||
+             el.webkitRequestFullscreen ||
+             el.webkitRequestFullScreen ||
+             el.mozRequestFullScreen ||
+             el.msRequestFullscreen;
+    if (!fn) return;
+    try {
+      var result = fn.call(el);
+      if (result && typeof result.catch === 'function') result.catch(function () {});
+    } catch (e) { /* ignore: browser refused */ }
+  }
+
+  /* ---------- First user gesture: fullscreen, then dismiss gate ---------- */
+  // Only events that browsers accept as a valid "user activation" for fullscreen.
+  // (touchstart / mousedown / keyup are NOT reliable, so they are not used.)
+  var gestureEvents = ['click', 'touchend', 'keydown'];
+  var attempts = 0;
+  var dismissed = false;
+
+  function setGateText(msg) {
+    gate.innerHTML = '<span></span>';
+    gate.firstChild.appendChild(document.createTextNode(msg));
+  }
+
+  function dismissGate() {
+    if (dismissed) return;
+    dismissed = true;
+    gate.className = 'hidden';
+    removeGestureListeners();
+    // Later key presses re-enter fullscreen if it was exited (Esc/F11 left alone).
+    document.addEventListener('keydown', function (e) {
+      var k = e.keyCode;
+      if (k === 27 || k === 122) return;
+      enterFullscreen();
+    }, false);
+  }
+
+  function onGesture(ev) {
+    if (dismissed) return;
+    attempts++;
+    if (ev && ev.type === 'touchend' && ev.preventDefault) ev.preventDefault();
+
+    // Direct <video> mode: first gesture unmutes and (re)starts playback.
+    if (video) {
+      video.muted = false;
+      var pp = video.play();
+      if (pp && typeof pp.catch === 'function') pp.catch(function () {
+        video.muted = true; video.play();
+      });
+    }
+
+    enterFullscreen();
+
+    // Check shortly after: did the browser actually accept it?
+    window.setTimeout(function () {
+      if (dismissed) return;
+      if (isFullscreen()) {
+        dismissGate();
+      } else if (attempts >= 2) {
+        // Fullscreen refused twice (some Smart TVs / iOS). Let the video be used anyway.
+        dismissGate();
+      } else {
+        setGateText('Fullscreen was blocked. Click again, or press F11 / use the browser menu.');
+      }
+    }, 400);
+  }
+
+  function addGestureListeners() {
+    for (var i = 0; i < gestureEvents.length; i++) {
+      document.addEventListener(gestureEvents[i], onGesture, false);
+    }
+  }
+  function removeGestureListeners() {
+    for (var i = 0; i < gestureEvents.length; i++) {
+      document.removeEventListener(gestureEvents[i], onGesture, false);
+    }
+  }
+
+  /* ---------- Periodic reload (loop workaround) ---------- */
+  function startReloadTimer() {
+    if (reloadTimer) window.clearInterval(reloadTimer);
+    var s = CONFIG.RELOAD_INTERVAL_SECONDS;
+    if (!s || s < 1) return;
+    reloadTimer = window.setInterval(function () { loadFrame(true); }, s * 1000);
+  }
+
+  /* ---------- Cursor auto-hide ---------- */
+  var idleTimer = null;
+  function wakeCursor() {
+    document.body.className = '';
+    if (!CONFIG.HIDE_CURSOR_AFTER_MS) return;
+    if (idleTimer) window.clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(function () {
+      document.body.className = 'idle';
+    }, CONFIG.HIDE_CURSOR_AFTER_MS);
+  }
+  document.addEventListener('mousemove', wakeCursor, false);
+
+  /* ---------- Init ---------- */
+  if (CONFIG.MODE === 'video') {
+    if (CONFIG.VIDEO_URL) { setupVideo(); }
+    else { setGateText('Set VIDEO_URL in index.html for video mode'); }
+  } else if (CONFIG.FILE_ID === 'PASTE_YOUR_DRIVE_FILE_ID_HERE') {
+    setGateText('Set FILE_ID in index.html or use ?id=YOUR_FILE_ID');
+  } else {
+    loadFrame(false);
+    startReloadTimer();
+  }
+  addGestureListeners();
+  wakeCursor();
+})();
+</script>
+</body>
+</html>
